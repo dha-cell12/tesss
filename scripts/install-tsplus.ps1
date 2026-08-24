@@ -39,45 +39,59 @@ try {
   $elapsedSeconds = 0
   $checkIntervalSeconds = 10
 
-  $targetFile = "C:\Program Files (x86)\TSplus\UserDesktop\files\APSC.exe"
+  $requiredFiles = @(
+    "C:\Program Files (x86)\TSplus\UserDesktop\files\APSC.exe",
+    "C:\Program Files (x86)\TSplus\UserDesktop\files\AdminTool.exe",
+    "C:\Program Files (x86)\TSplus\UserDesktop\files\TwoFactor.Admin.exe",
+    "C:\Program Files (x86)\TSplus\UserDesktop\files\OneLicense.dll",
+    "C:\Program Files (x86)\TSplus\Clients\www\cgi-bin\OneLicense.dll"
+  )
+
+  $allFilesPresent = $false
 
   while (-not $process.HasExited) {
     Start-Sleep -Seconds $checkIntervalSeconds
     $elapsedSeconds += $checkIntervalSeconds
 
-    # Log running related child setup processes to identify what is waiting
+    # Check if all required files are present
+    $missingCount = 0
+    foreach ($file in $requiredFiles) {
+      if (-not (Test-Path $file)) {
+        $missingCount++
+      }
+    }
+
+    if ($missingCount -eq 0) {
+      Write-Host "All required TSplus installation files verified on disk!"
+      $allFilesPresent = $true
+      # Stop lingering processes (e.g. TSplus-Security, rundll32, setup-tasks) that prevent main setup exit
+      Write-Host "Terminating lingering setup background processes..."
+      Get-Process -Name "Setup-TSplus*", "setup-tasks*", "svcr*", "TSplus-Security*", "rundll32*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      break
+    }
+
+    # Log running child setup processes for diagnostics
     $runningChildren = Get-Process -Name "Setup-TSplus*", "setup-tasks*", "svcr*", "TSplus-Security*", "rundll32*" -ErrorAction SilentlyContinue
     if ($runningChildren) {
       $childInfo = ($runningChildren | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ", "
-      Write-Host "Installation in progress... ($elapsedSeconds/$timeoutSeconds s). Active setup processes: $childInfo"
+      Write-Host "Installation in progress... ($elapsedSeconds/$timeoutSeconds s). Active processes: $childInfo (Missing files: $missingCount)"
     } else {
-      Write-Host "Installation in progress... ($elapsedSeconds/$timeoutSeconds s)."
-    }
-
-    # If key installation files are already present, check if primary setup completed or is waiting on background add-ons
-    if (Test-Path $targetFile) {
-      Write-Host "Target file APSC.exe detected at $targetFile!"
-      # If main process exited or is waiting on secondary child tasks for > 60 seconds after files exist, break/clean up
-      if ($elapsedSeconds -ge 180) {
-        Write-Host "Required installation files exist and wait threshold reached. Terminating lingering installer tasks if any..."
-        Get-Process -Name "Setup-TSplus*", "setup-tasks*", "svcr*", "TSplus-Security*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        break
-      }
+      Write-Host "Installation in progress... ($elapsedSeconds/$timeoutSeconds s). (Missing files: $missingCount)"
     }
 
     if ($elapsedSeconds -ge $timeoutSeconds) {
       Write-Warning "Installation timed out after $timeoutSeconds seconds"
       $process.Kill()
-      Get-Process -Name "Setup-TSplus*", "setup-tasks*", "svcr*", "TSplus-Security*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      Get-Process -Name "Setup-TSplus*", "setup-tasks*", "svcr*", "TSplus-Security*", "rundll32*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
       throw "Installation timed out after $timeoutSeconds seconds"
     }
   }
-  
-  if ($process.ExitCode -ne 0) {
+
+  if (-not $allFilesPresent -and $process.ExitCode -ne 0) {
     throw "Installation failed with exit code: $($process.ExitCode)"
   }
   
-  Write-Host "TSplus installation completed successfully with exit code: $($process.ExitCode)"
+  Write-Host "TSplus installation completed successfully."
 }
 catch {
   Write-Error "Error during installation: $_"
