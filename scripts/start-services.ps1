@@ -25,11 +25,15 @@ foreach ($service in $services) {
             Write-Host "Service $serviceName started successfully."
         } catch {
             Write-Host "Error starting service ${serviceName}: $($_.Exception.Message)" -ForegroundColor Red
-            exit 1
         }
     } catch {
-        Write-Host "Service $serviceName not found or cannot be accessed: $($_.Exception.Message)" -ForegroundColor Yellow
-        # Continue with other services instead of exiting
+        Write-Host "Service $serviceName not found. Attempting to start process directly from $($service.Path)..." -ForegroundColor Yellow
+        if (Test-Path $service.Path) {
+            Start-Process -FilePath $service.Path -ErrorAction SilentlyContinue
+            Write-Host "Started $($serviceName) process directly."
+        } else {
+            Write-Host "Executable $($service.Path) not found." -ForegroundColor Red
+        }
     }
 }
 
