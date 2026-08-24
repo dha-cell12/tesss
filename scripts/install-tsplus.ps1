@@ -12,7 +12,14 @@ try {
   
   Write-Host "Using setup file: $setupPath"
   
-  # Set silent flags for Inno Setup installer to avoid modal popups or prompt hangs
+  # Kill any existing TSplus setup or child processes that might interfere
+  $setupProcesses = Get-Process -Name "Setup-TSplus*", "setup-tasks*", "svcr*", "TSplus-Security*" -ErrorAction SilentlyContinue
+  foreach ($p in $setupProcesses) {
+    Write-Host "Stopping existing process $($p.ProcessName) (PID: $($p.Id))..."
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+  }
+
+  # Set silent flags for Inno Setup installer
   $arguments = @(
     '/SP-',
     '/VERYSILENT',
@@ -21,9 +28,9 @@ try {
     '/NOCANCEL',
     '/CLOSEAPPLICATIONS',
     '/RESTARTAPPLICATIONS',
-    '/Addons=yes'
+    '/Addons=no'
   )
-  
+
   Write-Host "Starting installation process with arguments: $($arguments -join ' ')"
   $process = Start-Process -FilePath $setupPath -ArgumentList $arguments -PassThru
 
@@ -32,17 +39,36 @@ try {
   $elapsedSeconds = 0
   $checkIntervalSeconds = 10
 
+  $targetFile = "C:\Program Files (x86)\TSplus\UserDesktop\files\APSC.exe"
+
   while (-not $process.HasExited) {
     Start-Sleep -Seconds $checkIntervalSeconds
     $elapsedSeconds += $checkIntervalSeconds
 
-    if ($elapsedSeconds % 30 -eq 0) {
-      Write-Host "Installation in progress... ($elapsedSeconds/$timeoutSeconds seconds elapsed)"
+    # Log running related child setup processes to identify what is waiting
+    $runningChildren = Get-Process -Name "Setup-TSplus*", "setup-tasks*", "svcr*", "TSplus-Security*", "rundll32*" -ErrorAction SilentlyContinue
+    if ($runningChildren) {
+      $childInfo = ($runningChildren | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ", "
+      Write-Host "Installation in progress... ($elapsedSeconds/$timeoutSeconds s). Active setup processes: $childInfo"
+    } else {
+      Write-Host "Installation in progress... ($elapsedSeconds/$timeoutSeconds s)."
+    }
+
+    # If key installation files are already present, check if primary setup completed or is waiting on background add-ons
+    if (Test-Path $targetFile) {
+      Write-Host "Target file APSC.exe detected at $targetFile!"
+      # If main process exited or is waiting on secondary child tasks for > 60 seconds after files exist, break/clean up
+      if ($elapsedSeconds -ge 180) {
+        Write-Host "Required installation files exist and wait threshold reached. Terminating lingering installer tasks if any..."
+        Get-Process -Name "Setup-TSplus*", "setup-tasks*", "svcr*", "TSplus-Security*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        break
+      }
     }
 
     if ($elapsedSeconds -ge $timeoutSeconds) {
       Write-Warning "Installation timed out after $timeoutSeconds seconds"
       $process.Kill()
+      Get-Process -Name "Setup-TSplus*", "setup-tasks*", "svcr*", "TSplus-Security*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
       throw "Installation timed out after $timeoutSeconds seconds"
     }
   }
